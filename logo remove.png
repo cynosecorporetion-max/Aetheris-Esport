@@ -1,0 +1,2178 @@
+<?php
+session_start();
+require 'config.php'; 
+
+$error_login = '';
+$success_register = '';
+
+// =======================================================
+// LOGIKA A: PROSES DAFTAR AKUN BARU (ANTI-BENTROK)
+// =======================================================
+if (isset($_POST['register_hero'])) {
+    $username = mysqli_real_escape_string($conn, trim($_POST['reg_username'] ?? ''));
+    $password = $_POST['reg_password'] ?? '';
+    
+    if (!empty($username) && !empty($password)) {
+        // Cek apakah username sudah dipakai orang lain
+        $cek_user = $conn->query("SELECT id FROM users WHERE username = '$username'");
+        if ($cek_user->num_rows > 0) {
+            $error_login = "Username sudah terdaftar! Gunakan nama lain.";
+        } else {
+            // Enkripsi password
+            $password_hashed = password_hash($password, PASSWORD_DEFAULT);
+            
+            $ins = $conn->prepare("INSERT INTO users (username, password, role) VALUES (?, ?, 'user')");
+            $ins->bind_param('ss', $username, $password_hashed);
+            if ($ins->execute()) {
+                $success_register = "Pendaftaran berhasil! Silakan login.";
+            } else {
+                $error_login = "Gagal mendaftar: " . $conn->error;
+            }
+            $ins->close();
+        }
+    }
+}
+
+// =======================================================
+// LOGIKA B: PROSES LOGIN (UNTUK SEMUA AKUN)
+// =======================================================
+if (isset($_POST['login_hero'])) {
+    $username = mysqli_real_escape_string($conn, trim($_POST['log_username'] ?? ''));
+    $password = $_POST['log_password'] ?? '';
+
+    if (!empty($username) && !empty($password)) {
+        $query = "SELECT * FROM users WHERE username = '$username'";
+        $result = $conn->query($query);
+
+        if ($result && $result->num_rows > 0) {
+            $row = $result->fetch_assoc();
+            if (password_verify($password, $row['password'])) {
+                $_SESSION['login'] = true;
+                $_SESSION['username'] = $row['username'];
+                $_SESSION['role'] = $row['role'];
+                
+                // Paksa refresh halaman menggunakan JavaScript
+                echo "<script>window.location.href='index.php';</script>";
+                exit;
+            } else {
+                $error_login = "Password salah!";
+            }
+        } else {
+            $error_login = "Username tidak ditemukan!";
+        }
+    }
+}
+
+// Ambil semua turnamen aktif menggunakan query MySQLi murni tanpa sub-query yang bikin crash
+$list_turnamen = [];
+
+// Gunakan try-catch agar jika ada masalah tabel di database, web joki utama TIDAK AKAN ikut rusak/blank
+try {
+    $query = "SELECT * FROM daftar_turnamen WHERE status_aktif = 'buka' ORDER BY id ASC";
+    $result = $conn->query($query);
+
+    if ($result) {
+        while ($tur = $result->fetch_assoc()) {
+            // Karena kolom pendaftar di database kamu strukturnya berbeda, kita pasang default aman di sini
+            $tur['total_pendaftar'] = 0; 
+            $list_turnamen[] = $tur;
+        }
+    }
+} catch (Exception $e) {
+    // Jika tabel turnamen belum siap/error, halaman web utama tetap akan loading dengan aman
+    $list_turnamen = [];
+}
+?>
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>shixuan MLBB & HOK — Joki Mobile Legends Indonesia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@700;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --gold: #FFD700;
+    --gold2: #FFA500;
+    --dark: #07080D;
+    --dark2: #0E1020;
+    --dark3: #141828;
+    --panel: #1A1F35;
+    --panel2: #212744;
+    --accent: #00D4FF;
+    --accent2: #7B2FFF;
+    --red: #FF3B3B;
+    --text: #E8EAFF;
+    --muted: #8B90B8;
+    --border: rgba(255,215,0,0.15);
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'Barlow', sans-serif;
+    background: var(--dark);
+    color: var(--text);
+    overflow-x: hidden;
+  }
+
+  /* --- NOISE OVERLAY --- */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.4;
+  }
+
+  /* --- NAV --- */
+  nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 4rem;
+    background: rgba(7,8,13,0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .logo {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2rem;
+    letter-spacing: 3px;
+    background: linear-gradient(135deg, var(--gold), var(--gold2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .logo span {
+    -webkit-text-fill-color: var(--accent);
+  }
+
+  nav ul {
+    display: flex;
+    gap: 2.5rem;
+    list-style: none;
+  }
+
+  nav ul a {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    transition: color 0.2s;
+  }
+
+  nav ul a:hover { color: var(--gold); }
+
+  .nav-cta {
+    background: linear-gradient(135deg, var(--gold), var(--gold2));
+    color: var(--dark) !important;
+    padding: 0.6rem 1.5rem;
+    border-radius: 4px;
+    font-weight: 700 !important;
+    -webkit-text-fill-color: var(--dark) !important;
+  }
+
+  /* --- HERO --- */
+  .hero {
+    position: relative;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    padding: 0 4rem;
+    overflow: hidden;
+  }
+
+  .hero-bg {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 60% 80% at 70% 50%, rgba(123,47,255,0.25) 0%, transparent 60%),
+      radial-gradient(ellipse 40% 60% at 20% 30%, rgba(0,212,255,0.12) 0%, transparent 50%),
+      linear-gradient(180deg, var(--dark) 0%, var(--dark2) 100%);
+  }
+
+  .hero-grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,215,0,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,215,0,0.03) 1px, transparent 1px);
+    background-size: 60px 60px;
+  }
+
+  .hero-content {
+    position: relative;
+    z-index: 2;
+    max-width: 700px;
+  }
+
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(255,215,0,0.1);
+    border: 1px solid rgba(255,215,0,0.3);
+    color: var(--gold);
+    padding: 0.4rem 1rem;
+    border-radius: 2px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 1.5rem;
+  }
+
+  .hero-badge::before {
+    content: '★';
+    font-size: 0.7rem;
+  }
+
+  h1 {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: clamp(4rem, 10vw, 8rem);
+    line-height: 0.9;
+    letter-spacing: 2px;
+    margin-bottom: 1.5rem;
+  }
+
+  h1 .line1 { color: var(--text); display: block; }
+
+  h1 .line2 {
+    display: block;
+    background: linear-gradient(135deg, var(--gold), var(--gold2) 50%, var(--accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .hero-desc {
+    font-size: 1.1rem;
+    color: var(--muted);
+    line-height: 1.7;
+    max-width: 500px;
+    margin-bottom: 2.5rem;
+  }
+
+  .hero-actions {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: linear-gradient(135deg, var(--gold), var(--gold2));
+    color: var(--dark);
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1rem;
+    font-weight: 800;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 1rem 2.5rem;
+    border-radius: 4px;
+    border: none;
+    cursor: pointer;
+    text-decoration: none;
+    transition: transform 0.2s, box-shadow 0.2s;
+    box-shadow: 0 0 30px rgba(255,215,0,0.3);
+  }
+
+  .btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0 50px rgba(255,215,0,0.5);
+  }
+
+  .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: transparent;
+    color: var(--text);
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 1rem 2rem;
+    border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.2);
+    cursor: pointer;
+    text-decoration: none;
+    transition: border-color 0.2s, background 0.2s;
+  }
+
+  .btn-secondary:hover {
+    border-color: var(--gold);
+    background: rgba(255,215,0,0.05);
+  }
+
+  .hero-stats {
+    display: flex;
+    gap: 3rem;
+    margin-top: 3rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .hero-stat .number {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2.5rem;
+    letter-spacing: 2px;
+    color: var(--gold);
+  }
+
+  .hero-stat .label {
+    font-size: 0.75rem;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+
+  /* Diamond floating graphic */
+  .hero-graphic {
+    position: absolute;
+    right: -2%;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 550px;
+    height: 550px;
+    pointer-events: none;
+  }
+
+  /* --- SECTION COMMON --- */
+  section { position: relative; }
+
+  .section-tag {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 0.75rem;
+  }
+
+  .section-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: clamp(2.5rem, 5vw, 4rem);
+    letter-spacing: 2px;
+    line-height: 1;
+    margin-bottom: 1rem;
+  }
+
+  .section-sub {
+    color: var(--muted);
+    font-size: 1rem;
+    max-width: 500px;
+    line-height: 1.6;
+  }
+
+  /* --- HOW IT WORKS --- */
+  .how {
+    padding: 6rem 4rem;
+    background: var(--dark2);
+  }
+
+  .how-header { margin-bottom: 4rem; }
+
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 2px;
+  }
+
+  .step {
+    background: var(--panel);
+    padding: 2.5rem 2rem;
+    position: relative;
+    transition: background 0.3s;
+  }
+
+  .step:hover { background: var(--panel2); }
+
+  .step::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--gold), var(--gold2));
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+
+  .step:hover::before { opacity: 1; }
+
+  .step-num {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 5rem;
+    line-height: 1;
+    color: rgba(255,215,0,0.08);
+    margin-bottom: 1rem;
+    display: block;
+  }
+
+  .step-icon {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+  }
+
+  .step h3 {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1.4rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 0.75rem;
+    color: var(--text);
+  }
+
+  .step p { color: var(--muted); font-size: 0.9rem; line-height: 1.6; }
+
+  /* --- PRICING --- */
+  .pricing {
+    padding: 6rem 4rem;
+    background: var(--dark);
+  }
+
+  .pricing-header {
+    text-align: center;
+    margin-bottom: 4rem;
+  }
+
+  .pricing-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 2px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  .price-card {
+    background: var(--panel);
+    padding: 2.5rem;
+    position: relative;
+    transition: transform 0.3s;
+    border: 1px solid transparent;
+  }
+
+  .price-card:hover { transform: translateY(-4px); }
+
+  .price-card.featured {
+    background: var(--panel2);
+    border-color: rgba(255,215,0,0.4);
+  }
+
+  .price-card.featured::after {
+    content: 'TERLARIS';
+    position: absolute;
+    top: -1px; right: 2rem;
+    background: linear-gradient(135deg, var(--gold), var(--gold2));
+    color: var(--dark);
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 2px;
+    padding: 0.25rem 0.75rem;
+  }
+
+  .rank-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.8rem;
+    border-radius: 2px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 1.5rem;
+  }
+
+  .rank-warrior { background: rgba(139,90,43,0.2); color: #CD7F32; }
+  .rank-epic { background: rgba(123,47,255,0.2); color: #A855F7; }
+  .rank-legend { background: rgba(255,215,0,0.15); color: var(--gold); }
+  .rank-myth { background: rgba(0,212,255,0.15); color: var(--accent); }
+  .rank-glorious { background: rgba(255,59,59,0.15); color: var(--red); }
+
+  .price-card h3 {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.8rem;
+    letter-spacing: 2px;
+    margin-bottom: 0.5rem;
+  }
+
+  .price-card .price-range {
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-bottom: 2rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .price-big {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 3.5rem;
+    letter-spacing: 2px;
+    color: var(--gold);
+    line-height: 1;
+    margin-bottom: 0.25rem;
+  }
+
+  .price-note {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-bottom: 2rem;
+  }
+
+  .features-list {
+    list-style: none;
+    margin-bottom: 2rem;
+  }
+
+  .features-list li {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+    font-size: 0.9rem;
+    color: var(--muted);
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+
+  .features-list li::before {
+    content: '✓';
+    color: var(--gold);
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .btn-order {
+    display: block;
+    width: 100%;
+    text-align: center;
+    padding: 0.9rem;
+    border-radius: 4px;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1rem;
+    font-weight: 800;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    cursor: pointer;
+    border: none;
+    text-decoration: none;
+    transition: all 0.2s;
+  }
+
+  .btn-order-outline {
+    background: transparent;
+    border: 1px solid rgba(255,215,0,0.4);
+    color: var(--gold);
+  }
+
+  .btn-order-outline:hover {
+    background: rgba(255,215,0,0.1);
+  }
+
+  .btn-order-filled {
+    background: linear-gradient(135deg, var(--gold), var(--gold2));
+    color: var(--dark);
+    box-shadow: 0 0 20px rgba(255,215,0,0.25);
+  }
+
+  .btn-order-filled:hover {
+    box-shadow: 0 0 40px rgba(255,215,0,0.4);
+    transform: translateY(-1px);
+  }
+
+  /* --- TESTIMONIALS --- */
+  .testimonials {
+    padding: 6rem 4rem;
+    background: var(--dark2);
+    overflow: hidden;
+  }
+
+  .testimonials-header {
+    margin-bottom: 3rem;
+  }
+
+  .testi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 2px;
+  }
+
+  .testi-card {
+    background: var(--panel);
+    padding: 2rem;
+    position: relative;
+  }
+
+  .testi-card::before {
+    content: '"';
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 6rem;
+    color: rgba(255,215,0,0.07);
+    position: absolute;
+    top: -10px; right: 1.5rem;
+    line-height: 1;
+  }
+
+  .stars {
+    color: var(--gold);
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+    letter-spacing: 2px;
+  }
+
+  .testi-text {
+    font-size: 0.95rem;
+    line-height: 1.7;
+    color: var(--muted);
+    margin-bottom: 1.5rem;
+  }
+
+  .testi-author {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .testi-avatar {
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+  }
+
+  .testi-name { font-weight: 600; font-size: 0.9rem; }
+  .testi-rank { font-size: 0.75rem; color: var(--gold); }
+
+  /* --- WHY US --- */
+  .whyus {
+    padding: 6rem 4rem;
+    background: var(--dark);
+  }
+
+  .whyus-inner {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5rem;
+    align-items: center;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  .why-features {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    margin-top: 2rem;
+  }
+
+  .why-item {
+    display: flex;
+    gap: 1.25rem;
+    align-items: flex-start;
+  }
+
+  .why-icon {
+    width: 48px; height: 48px;
+    background: rgba(255,215,0,0.1);
+    border: 1px solid rgba(255,215,0,0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.3rem;
+    flex-shrink: 0;
+    border-radius: 4px;
+  }
+
+  .why-item h4 {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 0.25rem;
+  }
+
+  .why-item p { font-size: 0.85rem; color: var(--muted); line-height: 1.6; }
+
+  .big-stat-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 3rem;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .big-stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--accent2), var(--gold), var(--accent));
+  }
+
+  .big-num {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 7rem;
+    line-height: 1;
+    background: linear-gradient(135deg, var(--gold), var(--gold2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 0.5rem;
+  }
+
+  .big-stat-label {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1.2rem;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 2rem;
+  }
+
+  .mini-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    margin-top: 2rem;
+  }
+
+  .mini-stat {
+    background: var(--panel);
+    padding: 1.5rem;
+  }
+
+  .mini-stat .n {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2.5rem;
+    color: var(--accent);
+    display: block;
+  }
+
+  .mini-stat .l {
+    font-size: 0.75rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  /* --- FAQ --- */
+  .faq {
+    padding: 6rem 4rem;
+    background: var(--dark2);
+  }
+
+  .faq-inner {
+    max-width: 800px;
+    margin: 3rem auto 0;
+  }
+
+  .faq-item {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .faq-q {
+    width: 100%;
+    background: none;
+    border: none;
+    color: var(--text);
+    font-family: 'Barlow', sans-serif;
+    font-size: 1rem;
+    font-weight: 600;
+    text-align: left;
+    padding: 1.5rem 0;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .faq-q:hover { color: var(--gold); }
+
+  .faq-arrow {
+    color: var(--gold);
+    font-size: 1.2rem;
+    transition: transform 0.3s;
+    flex-shrink: 0;
+  }
+
+  .faq-a {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.4s ease;
+  }
+
+  .faq-a p {
+    color: var(--muted);
+    font-size: 0.9rem;
+    line-height: 1.7;
+    padding-bottom: 1.5rem;
+  }
+
+  .faq-item.open .faq-arrow { transform: rotate(45deg); }
+  .faq-item.open .faq-a { max-height: 300px; }
+
+  /* --- ORDER FORM --- */
+  .order {
+    padding: 6rem 4rem;
+    background: var(--dark2);
+  }
+
+  .order-inner {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4rem;
+    max-width: 1100px;
+    margin: 0 auto;
+    align-items: start;
+  }
+
+  .order-form-wrap {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 3rem;
+    position: relative;
+  }
+
+  .order-form-wrap::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--gold), var(--gold2));
+  }
+
+  .form-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2rem;
+    letter-spacing: 2px;
+    margin-bottom: 0.5rem;
+  }
+
+  .form-sub { color: var(--muted); font-size: 0.875rem; margin-bottom: 2rem; }
+
+  .form-group { margin-bottom: 1.25rem; }
+
+  label {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 0.5rem;
+  }
+
+  input, select, textarea {
+    width: 100%;
+    background: var(--dark2);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: var(--text);
+    padding: 0.85rem 1rem;
+    font-family: 'Barlow', sans-serif;
+    font-size: 0.95rem;
+    border-radius: 4px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  input:focus, select:focus, textarea:focus {
+    border-color: rgba(255,215,0,0.5);
+  }
+
+  select option { background: var(--dark2); }
+
+  textarea { resize: vertical; min-height: 80px; }
+
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+
+  .btn-submit {
+    width: 100%;
+    padding: 1.1rem;
+    background: linear-gradient(135deg, var(--gold), var(--gold2));
+    color: var(--dark);
+    border: none;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1.1rem;
+    font-weight: 800;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-radius: 4px;
+    margin-top: 1rem;
+    transition: all 0.2s;
+    box-shadow: 0 0 20px rgba(255,215,0,0.2);
+  }
+
+  .btn-submit:hover {
+    box-shadow: 0 0 40px rgba(255,215,0,0.4);
+    transform: translateY(-2px);
+  }
+
+  .order-info { }
+
+  .order-info .section-title { font-size: 2.5rem; }
+
+  .wa-card {
+    background: linear-gradient(135deg, #00a86b, #006b3c);
+    padding: 1.5rem;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 2rem;
+    cursor: pointer;
+    transition: transform 0.2s;
+    text-decoration: none;
+  }
+
+  .wa-card:hover { transform: translateY(-2px); }
+
+  .wa-icon {
+    font-size: 2rem;
+    flex-shrink: 0;
+  }
+
+  .wa-card h4 {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 1.1rem;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #fff;
+    margin-bottom: 0.2rem;
+  }
+
+  .wa-card p { font-size: 0.85rem; color: rgba(255,255,255,0.7); }
+
+  .guarantee-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 2rem;
+  }
+
+  .guarantee-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.9rem;
+    color: var(--muted);
+  }
+
+  .guarantee-item::before {
+    content: '⚡';
+    font-size: 0.85rem;
+  }
+
+  /* --- FOOTER --- */
+  footer {
+    background: var(--dark);
+    border-top: 1px solid var(--border);
+    padding: 3rem 4rem;
+  }
+
+  .footer-inner {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr;
+    gap: 3rem;
+    margin-bottom: 3rem;
+  }
+
+  .footer-brand p {
+    color: var(--muted);
+    font-size: 0.875rem;
+    line-height: 1.7;
+    margin-top: 1rem;
+    max-width: 300px;
+  }
+
+  .footer-col h5 {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 1rem;
+  }
+
+  .footer-col ul { list-style: none; }
+
+  .footer-col ul li {
+    margin-bottom: 0.5rem;
+  }
+
+  .footer-col ul a {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.875rem;
+    transition: color 0.2s;
+  }
+
+  .footer-col ul a:hover { color: var(--text); }
+
+  .footer-bottom {
+    border-top: 1px solid var(--border);
+    padding-top: 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .footer-bottom p { color: var(--muted); font-size: 0.8rem; }
+
+  .payment-icons {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+  }
+
+  .pay-badge {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 0.3rem 0.6rem;
+    border-radius: 3px;
+    text-transform: uppercase;
+  }
+
+  /* --- SCROLL ANIMATIONS --- */
+  .reveal {
+    opacity: 0;
+    transform: translateY(30px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+
+  .reveal.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* --- FLOATING BANNER --- */
+  .float-wa {
+    position: fixed;
+    bottom: 2rem;
+    right: 2rem;
+    z-index: 200;
+    background: #25D366;
+    color: white;
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.7rem;
+    box-shadow: 0 4px 20px rgba(37,211,102,0.4);
+    cursor: pointer;
+    text-decoration: none;
+    transition: transform 0.2s, box-shadow 0.2s;
+    animation: pulse 2s infinite;
+  }
+
+  .float-wa:hover {
+    transform: scale(1.1);
+    box-shadow: 0 4px 30px rgba(37,211,102,0.6);
+  }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 4px 20px rgba(37,211,102,0.4); }
+    50% { box-shadow: 0 4px 30px rgba(37,211,102,0.7), 0 0 0 10px rgba(37,211,102,0.1); }
+  }
+
+  /* --- MODAL --- */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.8);
+    z-index: 300;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(4px);
+  }
+
+  .modal-overlay.active { display: flex; }
+
+  .modal-box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 3rem;
+    max-width: 480px;
+    width: 90%;
+    position: relative;
+    text-align: center;
+  }
+
+  .modal-box::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--gold), var(--gold2));
+  }
+
+  .modal-close {
+    position: absolute;
+    top: 1rem; right: 1.25rem;
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 1.5rem;
+    cursor: pointer;
+  }
+
+  .modal-icon { font-size: 3rem; margin-bottom: 1rem; }
+
+  .modal-box h3 {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2rem;
+    letter-spacing: 2px;
+    margin-bottom: 0.75rem;
+    color: var(--gold);
+  }
+
+  .modal-box p {
+    color: var(--muted);
+    font-size: 0.9rem;
+    line-height: 1.6;
+    margin-bottom: 1.5rem;
+  }
+
+  .modal-wa {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: #25D366;
+    color: white;
+    padding: 0.9rem 2rem;
+    border-radius: 4px;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1rem;
+    font-weight: 800;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    text-decoration: none;
+    transition: all 0.2s;
+  }
+
+  .modal-wa:hover { opacity: 0.9; transform: translateY(-2px); }
+
+  @media (max-width: 900px) {
+    nav { padding: 1rem 1.5rem; }
+    nav ul { display: none; }
+    .hero, .how, .pricing, .testimonials, .whyus, .faq, .order { padding: 4rem 1.5rem; }
+    .hero-graphic { display: none; }
+    .whyus-inner, .order-inner { grid-template-columns: 1fr; gap: 2rem; }
+    .footer-inner { grid-template-columns: 1fr 1fr; }
+    .form-row { grid-template-columns: 1fr; }
+  }
+
+    /* Mengatur container logo agar teks dan gambar sejajar secara horizontal */
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 12px; /* Jarak antara logo gambar dengan tulisan AETHERIS */
+  font-family: 'Bebas Neue', sans-serif; /* Sesuai font navigasimu */
+  font-size: 24px;
+  color: #FFD700; /* Warna kuning emas Aetheris */
+}
+
+/* Mengatur ukuran gambar logo remove.png agar rapi di navbar */
+.nav-logo-img {
+  width: 40px;      /* Ukuran lebar gambar (bisa disesuaikan) */
+  height: 40px;     /* Ukuran tinggi gambar */
+  object-fit: contain;
+  filter: drop-shadow(0 0 4px rgba(0, 212, 255, 0.3)); /* Memberi efek neon biru tipis sesuai warna logo */
+}
+
+ /* Judul Portal Turnamen (Aman dari bentrokan CSS H1 Utama) */
+/* 1. Judul Portal Turnamen (Diberi jarak atas yang pas) */
+.portal-title {
+  font-size: 1.8rem;
+  font-weight: 800;
+  text-align: center;
+  
+  /* --- PERBAIKAN JARAK ATAS --- */
+  padding-top: 50px;      /* Memberikan ruang agar tidak mentok navbar/konten atas */
+  margin-top: 0;
+  margin-bottom: 30px;    /* Jarak dari judul ke card-card di bawahnya */
+  /* ---------------------------- */
+
+  color: #ffffff;
+  letter-spacing: 1px;
+}
+
+.portal-title span {
+  background: linear-gradient(45deg, #fdbf11, #48dfc4);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* 2. Container Card (Diberi jarak bawah yang aman) */
+.tournament-container {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 25px;
+  max-width: 1200px;
+  
+  /* --- PERBAIKAN JARAK BAWAH --- */
+  margin-left: auto;
+  margin-right: auto;
+  margin-top: 0;
+  margin-bottom: 50px;    /* Memberikan ruang 50px sebelum tombol "Turnamen Lainnya" */
+  background: var(--dark);
+}
+
+/* Card Bertema Gelap (Lebar dinaikkan ke 290px agar poster proporsional) */
+.tournament-card {
+  background: rgba(22, 17, 45, 0.85);
+  width: 290px; 
+  border-radius: 12px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 15px 30px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.tournament-card:hover {
+  transform: translateY(-6px);
+  border-color: #fdbf11;
+  box-shadow: 0 18px 35px rgba(253, 191, 17, 0.15);
+}
+
+/* Box Poster (Tinggi disesuaikan agar tidak penyet) */
+.poster-box {
+  width: 100%;
+  height: 350px; /* Kembali ke ukuran ideal untuk aspek rasio poster */
+  background: #16112d;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.poster-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.poster-placeholder {
+  font-weight: 700;
+  color: #48dfc4;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+/* Indikator kuota slot (Teks rapi, pas, satu baris) */
+.slot-info {
+  margin-top: 15px;
+  font-size: 0.75rem; /* Ukuran teks pas dibaca */
+  font-weight: 700;
+  background: rgba(72, 223, 196, 0.1);
+  color: #48dfc4;
+  border: 1px solid rgba(72, 223, 196, 0.3);
+  padding: 5px 14px;
+  border-radius: 20px;
+  text-align: center;
+  width: fit-content;
+  letter-spacing: 0.5px;
+}
+
+.slot-full {
+  background: rgba(220, 38, 38, 0.1);
+  color: #ef4444;
+  border-color: rgba(220, 38, 38, 0.3);
+}
+
+.button-group {
+  width: 100%;
+  margin-top: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Tombol Akses Utama & Sekunder */
+.btn-action {
+  display: block;
+  text-align: center;
+  background: #fdbf11;
+  color: #0b071e;
+  text-decoration: none;
+  font-weight: 700;
+  padding: 10px; /* Padding kembali seimbang */
+  border-radius: 6px;
+  font-size: 0.8rem; /* Ukuran teks tombol presisi */
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  transition: background 0.2s ease, transform 0.1s ease;
+}
+
+.btn-action:hover {
+  background: #e0a70b;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: #ffffff;
+}
+
+.btn-disabled {
+  background: #242038;
+  color: #6b7280;
+  border: 1px solid rgba(255, 255, 255, 0.02);
+  cursor: not-allowed;
+}
+
+/* 3. Container Tombol Paling Bawah (Biar tidak mepet ke batas akhir halaman/footer) */
+.more-container {
+  text-align: center;
+  
+  /* --- PERBAIKAN JARAK BAWAH AKHIR --- */
+  margin-top: 25px;
+  padding-bottom: 60px;   /* Memberikan ruang kosong di paling bawah halaman web */
+}
+
+/* Tombol Turnamen Lainnya */
+.btn-more {
+  display: inline-block;
+  background: transparent;
+  color: #48dfc4;
+  border: 1px solid #48dfc4;
+  text-decoration: none;
+  font-weight: bold;
+  padding: 10px 26px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  transition: all 0.2s ease;
+}
+
+.btn-more:hover {
+  background: rgba(72, 223, 196, 0.1);
+  box-shadow: 0 0 12px rgba(72, 223, 196, 0.2);
+}
+
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="logo">
+  <img src="logo remove.png" alt="AETHERIS Logo" class="nav-logo-img">
+  <span>AETHERIS</span>
+</div>
+  <ul>
+    <li><a href="#harga">Harga</a></li>
+    <li><a href="#cara">Cara Kerja</a></li>
+    <li><a href="#testimoni">Testimoni</a></li>
+    <li><a href="#faq">FAQ</a></li>
+    <li><a href="#turnamen.php">TURNAMEN</a></li>
+    <li><a href="#pesan" class="nav-cta">Pesan Sekarang</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-bg"></div>
+  <div class="hero-grid"></div>
+  <div class="hero-content">
+    <div class="hero-badge">Joki Mobile Legends #1 Indonesia</div>
+    <h1>
+      <span class="line1">NAIK RANK</span>
+      <span class="line2">LEBIH CEPAT</span>
+    </h1>
+    <p class="hero-desc">Joki rank Mobile Legends profesional — aman, cepat, dan terpercaya. Dari Warrior hingga Mythical Glory, kami siap membawa akunmu ke level berikutnya.</p>
+    <div class="hero-actions">
+      <a href="#pesan" class="btn-primary">⚡ Pesan Joki Sekarang</a>
+      <a href="#harga" class="btn-secondary">Lihat Harga →</a>
+    </div>
+    <div class="hero-stats">
+      <div class="hero-stat">
+        <div class="number">12K+</div>
+        <div class="label">Order Selesai</div>
+      </div>
+      <div class="hero-stat">
+        <div class="number">98%</div>
+        <div class="label">Tingkat Sukses</div>
+      </div>
+      <div class="hero-stat">
+        <div class="number">4.9★</div>
+        <div class="label">Rating Klien</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- forum Login -->
+    <div class="hero-login-box" style="flex: 0 0 350px; background: rgba(22, 17, 45, 0.65); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); padding: 30px; border-radius: 14px; border: 1px solid rgba(72, 223, 196, 0.15); box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6); box-sizing: border-box; z-index: 999;margin-left: 350px;">
+      
+      <?php if (!isset($_SESSION['login'])): ?>
+        
+        <?php if(!empty($error_login)): ?>
+          <div style="background: rgba(220, 38, 38, 0.15); color: #ef4444; border: 1px solid rgba(220, 38, 38, 0.3); padding: 8px; border-radius: 6px; font-size: 0.8rem; text-align: center; margin-bottom: 15px;"><?= $error_login; ?></div>
+        <?php endif; ?>
+        <?php if(!empty($success_register)): ?>
+          <div style="background: rgba(72, 223, 196, 0.15); color: #48dfc4; border: 1px solid rgba(72, 223, 196, 0.3); padding: 8px; border-radius: 6px; font-size: 0.8rem; text-align: center; margin-bottom: 15px;"><?= $success_register; ?></div>
+        <?php endif; ?>
+
+        <div id="form-login-container">
+            <h3 style="text-align: center; color: #fdbf11; margin-top: 0; margin-bottom: 25px; font-size: 1.3rem; font-weight: 800; text-transform: uppercase;">AETHERIS ACCESS</h3>
+            <form action="" method="POST">
+              <div style="margin-bottom: 18px;">
+                <label style="display: block; font-size: 0.8rem; color: #48dfc4; margin-bottom: 6px; font-weight: 600; text-transform: uppercase;">Username</label>
+                <input type="text" name="log_username" placeholder="Masukkan username..." required style="width: 100%; padding: 11px 14px; background: rgba(11, 7, 30, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; color: #fff; font-size: 0.9rem; box-sizing: border-box;">
+              </div>
+              <div style="margin-bottom: 18px;">
+                <label style="display: block; font-size: 0.8rem; color: #48dfc4; margin-bottom: 6px; font-weight: 600; text-transform: uppercase;">Password</label>
+                <input type="password" name="log_password" placeholder="Masukkan password..." required style="width: 100%; padding: 11px 14px; background: rgba(11, 7, 30, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; color: #fff; font-size: 0.9rem; box-sizing: border-box;">
+              </div>
+              <button type="submit" name="login_hero" style="width: 100%; padding: 12px; background: #fdbf11; color: #0b071e; border: none; border-radius: 6px; font-weight: bold; font-size: 0.85rem; cursor: pointer; text-transform: uppercase;">MASUK SISTEM</button>
+            </form>
+            <p style="text-align: center; font-size: 0.8rem; color: #fff; margin-top: 20px;">Belum punya akun? <a href="#" onclick="showRegister(event)" style="color: #48dfc4; font-weight: bold; text-decoration: none;">Daftar Akun</a></p>
+        </div>
+
+        <div id="form-register-container" style="display: none;">
+            <h3 style="text-align: center; color: #48dfc4; margin-top: 0; margin-bottom: 25px; font-size: 1.3rem; font-weight: 800; text-transform: uppercase;">BUAT AKUN</h3>
+            <form action="" method="POST">
+              <div style="margin-bottom: 18px;">
+                <label style="display: block; font-size: 0.8rem; color: #48dfc4; margin-bottom: 6px; font-weight: 600; text-transform: uppercase;">Username Baru</label>
+                <input type="text" name="reg_username" placeholder="Pilih username..." required style="width: 100%; padding: 11px 14px; background: rgba(11, 7, 30, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; color: #fff; font-size: 0.9rem; box-sizing: border-box;">
+              </div>
+              <div style="margin-bottom: 18px;">
+                <label style="display: block; font-size: 0.8rem; color: #48dfc4; margin-bottom: 6px; font-weight: 600; text-transform: uppercase;">Password Baru</label>
+                <input type="password" name="reg_password" placeholder="Buat password..." required style="width: 100%; padding: 11px 14px; background: rgba(11, 7, 30, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; color: #fff; font-size: 0.9rem; box-sizing: border-box;">
+              </div>
+              <button type="submit" name="register_hero" style="width: 100%; padding: 12px; background: #48dfc4; color: #0b071e; border: none; border-radius: 6px; font-weight: bold; font-size: 0.85rem; cursor: pointer; text-transform: uppercase;">DAFTAR SEKARANG</button>
+            </form>
+            <p style="text-align: center; font-size: 0.8rem; color: #fff; margin-top: 20px;">Sudah punya akun? <a href="#" onclick="showLogin(event)" style="color: #fdbf11; font-weight: bold; text-decoration: none;">Login di sini</a></p>
+        </div>
+
+      <?php else: ?>
+        <h3 style="text-align: center; color: #48dfc4; margin-top: 0; margin-bottom: 15px; font-size: 1.2rem; font-weight: 800;">WELCOME!</h3>
+        <p style="text-align: center; color: #fff; margin-bottom: 25px; font-size: 0.9rem;">
+          Halo, <strong><?= htmlspecialchars($_SESSION['username']); ?></strong>. Anda berhasil masuk sistem.
+        </p>
+        
+        <a href="view_checkout.php" style="display: block; text-align: center; padding: 12px; background: #fdbf11; color: #0b071e; border-radius: 6px; font-weight: bold; text-decoration: none; text-transform: uppercase; font-size: 0.85rem; margin-bottom: 12px;">
+          📋 LIHAT DATA CHECKOUT & CP
+        </a>
+        
+        <a href="logout.php" style="display: block; text-align: center; padding: 10px; background: transparent; color: #ef4444; border: 1px solid #ef4444; border-radius: 6px; font-weight: bold; text-decoration: none; text-transform: uppercase; font-size: 0.85rem;">
+          LOGOUT ACCOUNT
+        </a>
+      <?php endif; ?>
+
+    </div>
+  </div>
+</section>
+
+<script>
+function showRegister(e) {
+    if(e) e.preventDefault();
+    // Matikan required pada form login agar tidak memblokir browser
+    document.getElementsByName('log_username')[0].required = false;
+    document.getElementsByName('log_password')[0].required = false;
+    
+    // Aktifkan required pada form register
+    document.getElementsByName('reg_username')[0].required = true;
+    document.getElementsByName('reg_password')[0].required = true;
+
+    document.getElementById('form-login-container').style.display = 'none';
+    document.getElementById('form-register-container').style.display = 'block';
+}
+
+function showLogin(e) {
+    if(e) e.preventDefault();
+    // Matikan required pada form register
+    document.getElementsByName('reg_username')[0].required = false;
+    document.getElementsByName('reg_password')[0].required = false;
+    
+    // Aktifkan required pada form login
+    document.getElementsByName('log_username')[0].required = true;
+    document.getElementsByName('log_password')[0].required = true;
+
+    document.getElementById('form-register-container').style.display = 'none';
+    document.getElementById('form-login-container').style.display = 'block';
+}
+</script>
+
+      <!-- Outer rings -->
+      <circle cx="250" cy="250" r="220" fill="none" stroke="rgba(255,215,0,0.07)" stroke-width="1"/>
+      <circle cx="250" cy="250" r="180" fill="none" stroke="rgba(255,215,0,0.1)" stroke-width="1"/>
+      <circle cx="250" cy="250" r="140" fill="none" stroke="rgba(255,215,0,0.15)" stroke-width="1"/>
+      <!-- Main diamond -->
+      <polygon points="250,60 390,200 250,440 110,200" fill="url(#dg1)" filter="url(#glow)" opacity="0.7"/>
+      <!-- Inner diamond -->
+      <polygon points="250,120 340,210 250,370 160,210" fill="url(#dg2)" opacity="0.6"/>
+      <!-- Center shine -->
+      <polygon points="250,150 290,210 250,300 210,210" fill="rgba(255,255,255,0.15)"/>
+      <!-- Sparkles -->
+      <circle cx="250" cy="60" r="4" fill="#FFD700" filter="url(#glow)"/>
+      <circle cx="390" cy="200" r="4" fill="#FFD700" filter="url(#glow)"/>
+      <circle cx="250" cy="440" r="4" fill="#FFD700" filter="url(#glow)"/>
+      <circle cx="110" cy="200" r="4" fill="#FFD700" filter="url(#glow)"/>
+      
+      <!-- Bagian Star glints (Tanda Plus) Sudah Dihapus dari Sini -->
+    </svg>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section class="how" id="cara">
+  <div class="how-header reveal">
+    <div class="section-tag">Cara Kerja</div>
+    <h2 class="section-title">4 LANGKAH MUDAH</h2>
+    <p class="section-sub">Proses pemesanan joki rank kami simple dan transparan dari awal hingga akhir.</p>
+  </div>
+  <div class="steps">
+    <div class="step reveal">
+      <span class="step-num">01</span>
+      <div class="step-icon">📋</div>
+      <h3>Pilih Paket</h3>
+      <p>Pilih paket joki sesuai rank tujuanmu. Mulai dari Bronze hingga Mythical Glory tersedia.</p>
+    </div>
+    <div class="step reveal">
+      <span class="step-num">02</span>
+      <div class="step-icon">💳</div>
+      <h3>Lakukan Pembayaran</h3>
+      <p>Bayar via transfer bank, DANA, GoPay, OVO, atau metode lainnya. Konfirmasi otomatis.</p>
+    </div>
+    <div class="step reveal">
+      <span class="step-num">03</span>
+      <div class="step-icon">🎮</div>
+      <h3>Akun Diproses</h3>
+      <p>Tim worker profesional kami langsung mengerjakan akun-mu dengan win rate tinggi.</p>
+    </div>
+    <div class="step reveal">
+      <span class="step-num">04</span>
+      <div class="step-icon">🏆</div>
+      <h3>Rank Naik!</h3>
+      <p>Terima laporan progress setiap match. Rank naik sesuai target, atau uang kembali!</p>
+    </div>
+  </div>
+</section>
+
+<!-- PRICING -->
+<section class="pricing" id="harga">
+  <div class="pricing-header reveal">
+    <div class="section-tag">Paket Harga</div>
+    <h2 class="section-title">PILIH PAKETMU</h2>
+    <p class="section-sub" style="margin:0 auto;">Harga transparan tanpa biaya tersembunyi. Semua paket include garansi win rate.</p>
+  </div>
+  <div class="pricing-grid">
+
+    <div class="price-card reveal">
+      <span class="rank-badge rank-warrior">⚔️ Warrior–Elite</span>
+      <h3>Starter</h3>
+      <div class="price-range">Naik dari Warrior → Elite</div>
+      <div class="price-big">45K</div>
+      <div class="price-note">per tier / Rp 45.000</div>
+      <ul class="features-list">
+        <li>worker berpengalaman</li>
+        <li>Live update via chat</li>
+        <li>Garansi 70% win rate</li>
+        <li>Selesai 1–2 hari</li>
+        <li>Akun aman & rahasia</li>
+      </ul>
+      <a href="#pesan" class="btn-order btn-order-outline">Pesan Sekarang</a>
+    </div>
+
+    <div class="price-card featured reveal">
+      <span class="rank-badge rank-epic">💜 Epic–Legend</span>
+      <h3>Pro</h3>
+      <div class="price-range">Naik dari Epic → Legend</div>
+      <div class="price-big">75K</div>
+      <div class="price-note">per tier / Rp 75.000</div>
+      <ul class="features-list">
+        <li>worker pro rank tinggi</li>
+        <li>Live streaming optional</li>
+        <li>Garansi 75% win rate</li>
+        <li>Selesai 1 hari</li>
+        <li>Akun aman & rahasia</li>
+        <li>Prioritas antrian</li>
+      </ul>
+      <a href="#pesan" class="btn-order btn-order-filled">Pesan Sekarang</a>
+    </div>
+
+    <div class="price-card reveal">
+      <span class="rank-badge rank-legend">⭐ Legend–Myth</span>
+      <h3>Elite</h3>
+      <div class="price-range">Naik dari Legend → Mythic</div>
+      <div class="price-big">120K</div>
+      <div class="price-note">per tier / Rp 120.000</div>
+      <ul class="features-list">
+        <li>Top worker ML Indonesia</li>
+        <li>Hero preference tersedia</li>
+        <li>Garansi 80% win rate</li>
+        <li>Selesai &lt; 24 jam</li>
+        <li>Akun aman & rahasia</li>
+        <li>Laporan lengkap per match</li>
+      </ul>
+      <a href="#pesan" class="btn-order btn-order-outline">Pesan Sekarang</a>
+    </div>
+
+    <div class="price-card reveal">
+      <span class="rank-badge rank-myth">🔵 Mythic+</span>
+      <h3>Mythic Pro</h3>
+      <div class="price-range">Mythic → Mythical Glory</div>
+      <div class="price-big">200K</div>
+      <div class="price-note">per 100 star / Rp 200.000</div>
+      <ul class="features-list">
+        <li>Grand Master worker</li>
+        <li>Duo mode tersedia</li>
+        <li>Garansi 85% win rate</li>
+        <li>Support 24 jam</li>
+        <li>VIP customer service</li>
+        <li>Free coaching 1 sesi</li>
+      </ul>
+      <a href="#pesan" class="btn-order btn-order-outline">Pesan Sekarang</a>
+    </div>
+
+  </div>
+</section>
+
+<!-- TESTIMONIALS -->
+<section class="testimonials" id="testimoni">
+  <div class="testimonials-header reveal">
+    <div class="section-tag">Testimoni</div>
+    <h2 class="section-title">KATA MEREKA</h2>
+    <p class="section-sub">12.000+ pelanggan puas. Ini sebagian cerita mereka.</p>
+  </div>
+  <div class="testi-grid">
+
+    <div class="testi-card reveal">
+      <div class="stars">★★★★★</div>
+      <p class="testi-text">Serius terpercaya banget! Udah 3x pake AETHERIS, dari Epic ke Mythic lancar. worker-nya fast response dan akun aman. Auto balik lagi!</p>
+      <div class="testi-author">
+        <div class="testi-avatar" style="background:rgba(123,47,255,0.2);color:#A855F7;">RD</div>
+        <div>
+          <div class="testi-name">Rangga D.</div>
+          <div class="testi-rank">Legend → Mythic ✓</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="testi-card reveal">
+      <div class="stars">★★★★★</div>
+      <p class="testi-text">Keren banget pelayanannya! Order jam 10 malam, besok paginya udah naik 2 tier. Win rate-nya bagus banget, nggak ada yang bisa komplain.</p>
+      <div class="testi-author">
+        <div class="testi-avatar" style="background:rgba(0,212,255,0.15);color:var(--accent);">SN</div>
+        <div>
+          <div class="testi-name">Sinta N.</div>
+          <div class="testi-rank">Epic → Legend ✓</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="testi-card reveal">
+      <div class="stars">★★★★★</div>
+      <p class="testi-text">Garansi beneran ada! Sempet khawatir akun kena ban, tapi aman-aman aja. Progress dilaporin tiap match. Worth it banget harganya.</p>
+      <div class="testi-author">
+        <div class="testi-avatar" style="background:rgba(255,215,0,0.15);color:var(--gold);">BW</div>
+        <div>
+          <div class="testi-name">Bagas W.</div>
+          <div class="testi-rank">Mythic → Mythical Glory ✓</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="testi-card reveal">
+      <div class="stars">★★★★☆</div>
+      <p class="testi-text">Harga paling kompetitif dibanding tempat lain. Selesai tepat waktu, komunikasi worker-nya juga aktif. Definitely recommended!</p>
+      <div class="testi-author">
+        <div class="testi-avatar" style="background:rgba(255,59,59,0.15);color:var(--red);">AP</div>
+        <div>
+          <div class="testi-name">Aldi P.</div>
+          <div class="testi-rank">Warrior → Epic ✓</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="testi-card reveal">
+      <div class="stars">★★★★★</div>
+      <p class="testi-text">Udah cobain banyak joki, tapi AETHERIS tetep yang terbaik. Hero preference diikutin, mainnya juga rapih banget. 10/10!</p>
+      <div class="testi-author">
+        <div class="testi-avatar" style="background:rgba(0,166,107,0.2);color:#2ECC71;">FH</div>
+        <div>
+          <div class="testi-name">Fauzi H.</div>
+          <div class="testi-rank">Legend → Mythic ✓</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="testi-card reveal">
+      <div class="stars">★★★★★</div>
+      <p class="testi-text">Customer servicenya ramah dan fast respon. Order malem hari juga langsung diproses. Akun aman, nggak ada yang aneh-aneh. Makasih AETHERIS!</p>
+      <div class="testi-author">
+        <div class="testi-avatar" style="background:rgba(255,165,0,0.2);color:var(--gold2);">DL</div>
+        <div>
+          <div class="testi-name">Dewi L.</div>
+          <div class="testi-rank">Elite → Legend ✓</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- WHY US -->
+<section class="whyus">
+  <div class="whyus-inner">
+    <div>
+      <div class="section-tag reveal">Kenapa Kami</div>
+      <h2 class="section-title reveal">BEDA DARI<br>YANG LAIN</h2>
+      <div class="why-features">
+        <div class="why-item reveal">
+          <div class="why-icon">🔒</div>
+          <div>
+            <h4>100% Aman & Terpercaya</h4>
+            <p>Menggunakan VPN lokal, tidak share data akunmu ke pihak lain. Privacy adalah prioritas kami.</p>
+          </div>
+        </div>
+        <div class="why-item reveal">
+          <div class="why-icon">⚡</div>
+          <div>
+            <h4>Proses Super Cepat</h4>
+            <p>worker aktif 18 jam sehari. Order diproses maksimal 1 jam setelah pembayaran dikonfirmasi.</p>
+          </div>
+        </div>
+        <div class="why-item reveal">
+          <div class="why-icon">🏅</div>
+          <div>
+            <h4>worker berpengalaman</h4>
+            <p>Semua worker kami berada di rank Mythical Glory. Kemampuan terverifikasi dan terlatih.</p>
+          </div>
+        </div>
+        <div class="why-item reveal">
+          <div class="why-icon">💰</div>
+          <div>
+            <h4>Garansi Uang Kembali</h4>
+            <p>Jika target rank tidak tercapai, kami refund 100% tanpa tanya-tanya. Zero risk untuk kamu.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="reveal">
+      <div class="big-stat-card">
+        <div class="big-num">98%</div>
+        <div class="big-stat-label">Win Rate Rata-Rata</div>
+        <p style="color:var(--muted);font-size:0.85rem;line-height:1.6;">Diukur dari total 12.000+ match yang telah diselesaikan oleh worker kami sepanjang 2023–2025.</p>
+        <div class="mini-stats">
+          <div class="mini-stat">
+            <span class="n">12K+</span>
+            <span class="l">Order Selesai</span>
+          </div>
+          <div class="mini-stat">
+            <span class="n">50+</span>
+            <span class="l">Pro Worker</span>
+          </div>
+          <div class="mini-stat">
+            <span class="n">24/7</span>
+            <span class="l">Support Aktif</span>
+          </div>
+          <div class="mini-stat">
+            <span class="n">2 Jam</span>
+            <span class="l">Avg. Response</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section class="faq" id="faq">
+  <div style="text-align:center;" class="reveal">
+    <div class="section-tag">FAQ</div>
+    <h2 class="section-title">PERTANYAAN UMUM</h2>
+    <p class="section-sub" style="margin:0 auto;">Ada yang masih bingung? Kami jawab di sini.</p>
+  </div>
+  <div class="faq-inner">
+    <div class="faq-item reveal">
+      <button class="faq-q" onclick="toggleFaq(this)">
+        Apakah akun saya aman selama proses joki?
+        <span class="faq-arrow">+</span>
+      </button>
+      <div class="faq-a">
+        <p>Ya, 100% aman. worker kami menggunakan VPN lokal Indonesia sehingga server tidak mendeteksi login dari lokasi asing. Kami juga tidak pernah mengubah data akun (email, password, PIN) tanpa izin kamu.</p>
+      </div>
+    </div>
+    <div class="faq-item reveal">
+      <button class="faq-q" onclick="toggleFaq(this)">
+        Berapa lama proses joki rank selesai?
+        <span class="faq-arrow">+</span>
+      </button>
+      <div class="faq-a">
+        <p>Tergantung paket yang dipilih. Rata-rata 1–2 hari untuk kenaikan 1 tier. Paket Pro dan Elite mendapat prioritas antrian sehingga bisa selesai dalam 24 jam atau kurang.</p>
+      </div>
+    </div>
+    <div class="faq-item reveal">
+      <button class="faq-q" onclick="toggleFaq(this)">
+        Metode pembayaran apa saja yang diterima?
+        <span class="faq-arrow">+</span>
+      </button>
+      <div class="faq-a">
+        <p>Kami menerima transfer bank (BCA, Mandiri, BRI, BNI), e-wallet (GoPay, OVO, DANA, ShopeePay), dan QRIS. Konfirmasi pembayaran bisa langsung via WhatsApp.</p>
+      </div>
+    </div>
+    <div class="faq-item reveal">
+      <button class="faq-q" onclick="toggleFaq(this)">
+        Bagaimana jika target rank tidak tercapai?
+        <span class="faq-arrow">+</span>
+      </button>
+      <div class="faq-a">
+        <p>Kami memberikan garansi refund 100% jika target rank tidak berhasil dicapai sesuai perjanjian. Tidak ada pertanyaan tambahan, proses refund dilakukan dalam 1x24 jam.</p>
+      </div>
+    </div>
+    <div class="faq-item reveal">
+      <button class="faq-q" onclick="toggleFaq(this)">
+        Bisakah saya tetap main saat proses joki berjalan?
+        <span class="faq-arrow">+</span>
+      </button>
+      <div class="faq-a">
+        <p>Sebaiknya tidak bermain di akun yang sedang dijoki untuk menghindari konflik jadwal dan menjaga konsistensi win rate. Kamu bisa diskusi jadwal main bersamaan dengan booster-mu.</p>
+      </div>
+    </div>
+    <div class="faq-item reveal">
+      <button class="faq-q" onclick="toggleFaq(this)">
+        Apakah tersedia layanan joki hero tertentu?
+        <span class="faq-arrow">+</span>
+      </button>
+      <div class="faq-a">
+        <p>Ya! Untuk paket Elite ke atas, kamu bisa request hero atau role tertentu. worker kami menguasai semua role: Tank, Fighter, Assassin, Mage, Marksman, dan Support.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="turnamen" id="turnamen.php">
+  <h2 class="portal-title reveal">🏆 AETHERIS <span>TOURNAMENT PORTAL</span></h2>
+
+  <div class="tournament-container">
+      
+      <?php if (!empty($list_turnamen)): ?>
+          <?php foreach ($list_turnamen as $tur): 
+              $max_slot = !empty($tur['kuota_maksimal']) ? $tur['kuota_maksimal'] : 8;
+              $terisi = $tur['total_pendaftar'];
+              $apakah_penuh = ($terisi >= $max_slot);
+          ?>
+              
+              <div class="tournament-card reveal">
+                  
+                  <div class="poster-box">
+                      <?php if (file_exists($tur['poster']) && $tur['poster'] != 'default-poster.jpg'): ?>
+                          <img src="<?= htmlspecialchars($tur['poster']) ?>" alt="Poster Turnamen">
+                      <?php else: ?>
+                          <div class="poster-placeholder">POSTER TURNAMEN</div>
+                      <?php endif; ?>
+                  </div>
+
+                  <div class="slot-info <?= $apakah_penuh ? 'slot-full' : '' ?>">
+                      <?= $apakah_penuh ? '🔒 SLOT FULL' : '👥 SLOT TERISI: ' . $terisi . ' / ' . $max_slot ?>
+                  </div>
+                  
+                  <div class="button-group">
+                      <?php if ($apakah_penuh): ?>
+                          <a href="#" class="btn-action btn-disabled" onclick="alert('Maaf, kuota pendaftaran turnamen ini sudah penuh!'); return false;">PENDAFTARAN TUTUP</a>
+                      <?php else: ?>
+                          <a href="<?= htmlspecialchars($tur['link_daftar']) ?>?id_tur=<?= $tur['id'] ?>" class="btn-action">DAFTAR SEKARANG</a>
+                      <?php endif; ?>
+                      
+                      <a href="<?= htmlspecialchars($tur['link_braket']) ?>?id_tur=<?= $tur['id'] ?>" class="btn-action btn-secondary">LIHAT BRAKET</a>
+                  </div>
+
+              </div>
+
+          <?php endforeach; ?>
+      <?php else: ?>
+          <p style="text-align: center; color: #9ca3af; font-style: italic;">Saat ini belum ada turnamen yang dibuka.</p>
+      <?php endif; ?>
+
+  </div>
+
+  <div class="more-container reveal">
+      <a href="#" class="btn-more" onclick="alert('Turnamen lainnya akan segera hadir!')">Turnamen Lainnya</a>
+  </div>
+</section>
+
+
+<!-- ORDER FORM -->
+<section class="order" id="pesan">
+  <div class="order-inner">
+    <div class="order-form-wrap reveal">
+      <div class="form-title">PESAN JOKI</div>
+      <p class="form-sub">Isi form di bawah, kami akan segera menghubungimu via WhatsApp.</p>
+
+      <div class="form-group">
+        <label>Nama Lengkap</label>
+        <input type="text" placeholder="Nama kamu..." id="nama">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>No. WhatsApp</label>
+          <input type="tel" placeholder="08xxxxxxxxxx" id="wa">
+        </div>
+        <div class="form-group">
+          <label>ID Akun ML</label>
+          <input type="text" placeholder="ID ML kamu" id="ml_id">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Rank Saat Ini</label>
+          <select id="rank_now">
+            <option value="">Pilih rank...</option>
+            <option>Warrior</option>
+            <option>Elite</option>
+            <option>Master</option>
+            <option>Grandmaster</option>
+            <option>Epic</option>
+            <option>Legend</option>
+            <option>Mythic</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Rank Tujuan</label>
+          <select id="rank_target">
+            <option value="">Pilih tujuan...</option>
+            <option>Elite</option>
+            <option>Master</option>
+            <option>Grandmaster</option>
+            <option>Epic</option>
+            <option>Legend</option>
+            <option>Mythic</option>
+            <option>Mythical Glory</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Paket</label>
+        <select id="paket">
+          <option value="">Pilih paket...</option>
+          <option>Starter — Rp 45.000/tier</option>
+          <option>Pro — Rp 75.000/tier</option>
+          <option>Elite — Rp 120.000/tier</option>
+          <option>Mythic Pro — Rp 200.000/100 star</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Catatan Tambahan (opsional)</label>
+        <textarea placeholder="Hero preference, jadwal, atau permintaan lainnya..." id="catatan"></textarea>
+      </div>
+
+      <button class="btn-submit" onclick="submitOrder()">⚡ KIRIM PESANAN</button>
+    </div>
+
+    <div class="order-info reveal">
+      <div class="section-tag">Hubungi Kami</div>
+      <h2 class="section-title">SIAP BANTU<br>24/7</h2>
+      <p class="section-sub">Tim kami selalu aktif dan siap membantu proses order kamu kapanpun.</p>
+
+      <a href="https://wa.me/628123456789?text=Halo%20MLBoost%2C%20saya%20ingin%20order%20joki%20rank!" target="_blank" class="wa-card">
+        <div class="wa-icon">💬</div>
+        <div>
+          <h4>Chat via WhatsApp</h4>
+          <p>Respon cepat · Layanan 24 jam · Konsultasi gratis</p>
+        </div>
+      </a>
+
+      <div class="guarantee-items" style="margin-top:2rem;">
+        <div class="guarantee-item">Garansi uang kembali jika rank tidak naik</div>
+        <div class="guarantee-item">Akun 100% aman, menggunakan VPN lokal</div>
+        <div class="guarantee-item">Progress update setiap match selesai</div>
+        <div class="guarantee-item">worker pro dengan rank Mythical Glory</div>
+        <div class="guarantee-item">Pembayaran setelah konfirmasi order</div>
+        <div class="guarantee-item">Support aktif 24 jam via WhatsApp</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <div class="logo"><span>AETHERIS</span></div>
+      <p>Layanan joki rank Mobile Legends profesional #1 di Indonesia. Aman, cepat, dan terpercaya sejak 2021.</p>
+    </div>
+    <div class="footer-col">
+      <h5>Layanan</h5>
+      <ul>
+        <li><a href="#harga">Joki Rank</a></li>
+        <li><a href="#harga">Push Mythic</a></li>
+        <li><a href="#">Joki Winstreak</a></li>
+        <li><a href="#">Coaching 1on1</a></li>
+      </ul>
+    </div>
+    <div class="footer-col">
+      <h5>Info</h5>
+      <ul>
+        <li><a href="#cara">Cara Kerja</a></li>
+        <li><a href="#faq">FAQ</a></li>
+        <li><a href="#testimoni">Testimoni</a></li>
+        <li><a href="#">Syarat & Ketentuan</a></li>
+      </ul>
+    </div>
+    <div class="footer-col">
+      <h5>Kontak</h5>
+      <ul>
+        <li><a href="https://wa.me/628123456789">WhatsApp</a></li>
+        <li><a href="#">Instagram</a></li>
+        <li><a href="#">Telegram</a></li>
+        <li><a href="#">Email Kami</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <p>© 2024 AETHERIS. Semua hak dilindungi. Kami tidak berafiliasi dengan Moonton/Mobile Legends.</p>
+    <div class="payment-icons">
+      <span class="pay-badge">BCA</span>
+      <span class="pay-badge">DANA</span>
+      <span class="pay-badge">OVO</span>
+      <span class="pay-badge">GoPay</span>
+      <span class="pay-badge">QRIS</span>
+    </div>
+  </div>
+</footer>
+
+<!-- Floating WA -->
+<a href="https://wa.me/628123456789?text=Halo%20MLBoost%2C%20saya%20ingin%20order%20joki%20rank!" target="_blank" class="float-wa" title="Chat WhatsApp">💬</a>
+
+<!-- Order Success Modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal-box">
+    <button class="modal-close" onclick="closeModal()">×</button>
+    <div class="modal-icon">🏆</div>
+    <h3>ORDER DITERIMA!</h3>
+    <p>Terima kasih! Pesananmu sudah kami catat. Tim kami akan segera menghubungimu via WhatsApp dalam waktu kurang dari 30 menit.</p>
+    <a href="https://wa.me/628123456789?text=Halo%2C+saya+baru+saja+mengisi+form+order+joki+rank!" target="_blank" class="modal-wa">
+      💬 Konfirmasi via WhatsApp
+    </a>
+  </div>
+</div>
+
+<script>
+  // Scroll reveal
+  const reveals = document.querySelectorAll('.reveal');
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry, i) => {
+      if (entry.isIntersecting) {
+        setTimeout(() => {
+          entry.target.classList.add('visible');
+        }, 100);
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.1 });
+  reveals.forEach(el => observer.observe(el));
+
+  // FAQ
+  function toggleFaq(btn) {
+    const item = btn.parentElement;
+    const isOpen = item.classList.contains('open');
+    document.querySelectorAll('.faq-item').forEach(i => i.classList.remove('open'));
+    if (!isOpen) item.classList.add('open');
+  }
+
+  // Order submit -> kirim ke process_order.php (XAMPP)
+  async function submitOrder() {
+    const nama = document.getElementById('nama').value.trim();
+    const wa = document.getElementById('wa').value.trim();
+    const ml_id = document.getElementById('ml_id').value.trim();
+    const rank_now = document.getElementById('rank_now').value;
+    const rank_target = document.getElementById('rank_target').value;
+    const paket = document.getElementById('paket').value;
+    const catatan = document.getElementById('catatan').value.trim();
+
+    if (!nama || !wa || !ml_id || !rank_now || !rank_target || !paket) {
+      alert('Mohon lengkapi semua field yang wajib diisi!');
+      return;
+    }
+
+    const fd = new FormData();
+    fd.append('nama', nama);
+    fd.append('wa', wa);
+    fd.append('ml_id', ml_id);
+    fd.append('rank_now', rank_now);
+    fd.append('rank_target', rank_target);
+    fd.append('paket', paket);
+    fd.append('catatan', catatan);
+
+    try {
+      const res = await fetch('process_order.php', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.ok) {
+        document.getElementById('modal').classList.add('active');
+        document.querySelectorAll('#nama,#wa,#ml_id,#catatan').forEach(i => i.value = '');
+        document.querySelectorAll('#rank_now,#rank_target,#paket').forEach(s => s.selectedIndex = 0);
+      } else {
+        alert(data.msg || 'Gagal mengirim pesanan');
+      }
+    } catch (err) {
+      alert('Tidak bisa terhubung ke server. Pastikan XAMPP (Apache + MySQL) berjalan.');
+    }
+  }
+
+  function closeModal() {
+    document.getElementById('modal').classList.remove('active');
+  }
+
+  document.getElementById('modal').addEventListener('click', function(e) {
+    if (e.target === this) closeModal();
+  });
+
+  // Stagger reveal for cards
+  document.querySelectorAll('.pricing-grid .price-card, .testi-grid .testi-card, .steps .step').forEach((el, i) => {
+    el.style.transitionDelay = (i * 0.1) + 's';
+  });
+</script>
+</body>
+</html>
